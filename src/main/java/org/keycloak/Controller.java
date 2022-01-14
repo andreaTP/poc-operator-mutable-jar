@@ -1,7 +1,5 @@
 package org.keycloak;
 
-import javax.inject.Inject;
-
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.javaoperatorsdk.operator.api.reconciler.*;
 import org.keycloak.crd.FSMStatus;
@@ -10,8 +8,11 @@ import org.keycloak.crd.Keycloak;
 @ControllerConfiguration(namespaces = Constants.WATCH_CURRENT_NAMESPACE, finalizerName = Constants.NO_FINALIZER)
 public class Controller implements Reconciler<Keycloak> {
 
-    @Inject
-    KubernetesClient client;
+    private KubernetesClient client;
+
+    Controller(KubernetesClient client) {
+        this.client = client;
+    }
 
     @Override
     public UpdateControl<Keycloak> reconcile(Keycloak keycloak, Context context) {
@@ -29,7 +30,7 @@ public class Controller implements Reconciler<Keycloak> {
         next = current.apply(fsmContext);
         processed = current;
 
-        if (keycloak.getStatus().getProcessed() != processed || keycloak.getStatus().getNext() != next) {
+        if (keycloak.getStatus() == null || keycloak.getStatus().getProcessed() != processed || keycloak.getStatus().getNext() != next) {
             keycloak.setStatus(new FSMStatus(current, next));
             return UpdateControl.updateStatus(keycloak);
         } else {

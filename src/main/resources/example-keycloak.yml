@@ -1,0 +1,5 @@
+apiVersion: org.test/v1alpha1
+kind: Keycloak
+metadata:
+  name: example-kc
+spec: {}

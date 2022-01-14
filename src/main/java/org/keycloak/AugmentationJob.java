@@ -22,22 +22,41 @@ public class AugmentationJob {
     }
 
     public static Job desiredJob(Keycloak kc) {
+
+        // Files to store:
+        // /opt/keycloak/lib/quarkus/build-system.properties
+        // /opt/keycloak/lib/quarkus/generated-bytecode.jar
+        // /opt/keycloak/lib/quarkus/quarkus-application.dat
+        // /opt/keycloak/lib/quarkus/transformed-bytecode.jar
+
         return new JobBuilder()
                 .withNewMetadata()
                 .withName(kc.getMetadata().getName())
                 .withNamespace(kc.getMetadata().getNamespace())
+                .withOwnerReferences(kc.getOwnerRefereces())
                 .endMetadata()
                 .withNewSpec()
                 .withNewTemplate()
                 .withNewSpec()
+                .withRestartPolicy("Never")
                 .addNewContainer()
                 .withName("keycloak-main")
                 .withImage("quay.io/keycloak/keycloak-x:latest")
-                .withCommand("build")
-                .addNewPort()
-                .withHostPort(8080)
-                .endPort()
+                .withCommand("/bin/bash")
+                .withArgs("-c", "/opt/keycloak/bin/kc.sh build && sleep infinity")
+                .addNewVolumeMount()
+                .withName("augmentation")
+                .withMountPath("/opt/keycloak/augmented")
+                .withReadOnly(false)
+                .endVolumeMount()
                 .endContainer()
+                .addNewVolume()
+                .withName("augmentation")
+                .withNewSecret()
+                .withSecretName(kc.getMetadata().getName() + "-augmentation")
+                .withDefaultMode(256)
+                .endSecret()
+                .endVolume()
                 .endSpec()
                 .endTemplate()
                 .endSpec()
