@@ -32,6 +32,7 @@ public class Controller implements Reconciler<Keycloak>, ErrorStatusHandler<Keyc
         ControllerFSM current = null;
         ControllerFSM processed = null;
         ControllerFSM next = null;
+
         if (keycloak.getStatus() == null || keycloak.getStatus().getNext() == null) {
             current = ControllerFSM.UNKNOWN;
         } else {
@@ -41,13 +42,12 @@ public class Controller implements Reconciler<Keycloak>, ErrorStatusHandler<Keyc
         next = current.apply(fsmContext);
         processed = current;
 
-        // Custom transition management handling
         var transitionId = new TransitionIdentifier(current, next);
         if (ControllerFSM.stateTransitionModifiers.containsKey(transitionId)) {
             return ControllerFSM.stateTransitionModifiers.get(transitionId).apply(keycloak);
-        }
-
-        if (keycloak.getStatus() == null || keycloak.getStatus().getProcessed() != processed || keycloak.getStatus().getNext() != next) {
+        } else if (keycloak.getStatus() == null ||
+                keycloak.getStatus().getProcessed() != processed ||
+                keycloak.getStatus().getNext() != next) {
             keycloak.setStatus(new FSMStatus(current, next));
             return UpdateControl.updateStatus(keycloak);
         } else {

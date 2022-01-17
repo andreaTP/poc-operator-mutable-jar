@@ -67,8 +67,6 @@ public enum ControllerFSM {
             logger.info("Recreating the augmentation resources");
 
             var jobSelector = AugmentationJob.jobSelector(fsmContext.getClient(), kc);
-            // WORKAROUND
-            // fsmContext.getClient().batch().v1().jobs().createOrReplace(AugmentationJob.desiredJob(kc));
             if (jobSelector.get() != null) {
                 jobSelector.delete();
             }
@@ -160,8 +158,6 @@ public enum ControllerFSM {
         }
 
         for (var file: fileNames) {
-            // WORKAROUND
-            // fsmContext.getClient().secrets().createOrReplace(AugmentationSecret.desiredSecret(kc));
             var secretSelector = AugmentationSecret.secretSelector(fsmContext.getClient(), fsmContext.getKeycloak(), file);
             if (secretSelector.get() != null) {
                 secretSelector.delete();
@@ -178,7 +174,6 @@ public enum ControllerFSM {
                 .delete();
 
         // and finally create the Deployment
-
         logger.info("Creating deployment");
         KeycloakDeployment
                 .deploymentSelector(fsmContext.getClient(), fsmContext.getKeycloak())
