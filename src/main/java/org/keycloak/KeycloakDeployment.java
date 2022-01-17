@@ -52,8 +52,9 @@ public class KeycloakDeployment {
                 .withHostPort(8080)
                 .endPort()
                 .addNewVolumeMount()
-                .withName("distribution")
+                .withName("augmentation")
                 .withMountPath("/opt/keycloak/lib/quarkus")
+                .withReadOnly(true)
                 .endVolumeMount()
                 .endContainer()
                 // Secret containing the tar.gz of the cached distribution
