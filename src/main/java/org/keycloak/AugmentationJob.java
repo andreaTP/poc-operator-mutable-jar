@@ -21,11 +21,6 @@ public class AugmentationJob {
                 .withName(kc.getMetadata().getName());
     }
 
-    // Deprecate this in favor of selector?
-    public static Job getJob(KubernetesClient client, Keycloak kc) {
-        return jobSelector(client, kc).get();
-    }
-
     public static Job desiredJob(Keycloak kc) {
 
         // Files to store:
@@ -50,19 +45,7 @@ public class AugmentationJob {
                 .withImage("quay.io/keycloak/keycloak-x:latest")
                 .withCommand("/bin/bash")
                 .withArgs("-c", "/opt/keycloak/bin/kc.sh build && sleep infinity")
-//                .addNewVolumeMount()
-//                .withName("augmentation")
-//                .withMountPath("/opt/keycloak/augmented")
-//                .withReadOnly(false)
-//                .endVolumeMount()
                 .endContainer()
-//                .addNewVolume()
-//                .withName("augmentation")
-//                .withNewSecret()
-//                .withSecretName(kc.getMetadata().getName() + "-augmentation")
-//                .withDefaultMode(256)
-//                .endSecret()
-//                .endVolume()
                 .endSpec()
                 .endTemplate()
                 .endSpec()

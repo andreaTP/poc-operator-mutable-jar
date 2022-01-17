@@ -41,12 +41,10 @@ public class Controller implements Reconciler<Keycloak>, ErrorStatusHandler<Keyc
         next = current.apply(fsmContext);
         processed = current;
 
-        // TODO: come up with a better control flow for transitions and retry
-        if (current == ControllerFSM.AUGMENTATION_STARTED && next == ControllerFSM.AUGMENTATION_STARTED) {
-            return UpdateControl.<Keycloak>noUpdate().rescheduleAfter(5, TimeUnit.SECONDS);
-        } else if (current == ControllerFSM.AUGMENTATION_STARTED && next == ControllerFSM.AUGMENTATION_FINISHED) {
-            keycloak.setStatus(new FSMStatus(current, next));
-            return UpdateControl.updateStatus(keycloak).rescheduleAfter(0);
+        // Custom transition management handling
+        var transitionId = new TransitionIdentifier(current, next);
+        if (ControllerFSM.stateTransitionModifiers.containsKey(transitionId)) {
+            return ControllerFSM.stateTransitionModifiers.get(transitionId).apply(keycloak);
         }
 
         if (keycloak.getStatus() == null || keycloak.getStatus().getProcessed() != processed || keycloak.getStatus().getNext() != next) {

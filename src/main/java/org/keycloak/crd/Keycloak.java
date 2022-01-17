@@ -31,4 +31,9 @@ class Keycloak extends CustomResource<Void, FSMStatus> implements Namespaced {
         );
         return ownerReferences;
     }
+
+    public Keycloak withStatus(FSMStatus status) {
+        this.setStatus(status);
+        return this;
+    }
 }

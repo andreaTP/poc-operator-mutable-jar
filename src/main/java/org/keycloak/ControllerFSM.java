@@ -1,10 +1,15 @@
 package org.keycloak;
 
 import io.fabric8.kubernetes.client.dsl.ExecListener;
+import io.javaoperatorsdk.operator.api.reconciler.BaseControl;
+import io.javaoperatorsdk.operator.api.reconciler.UpdateControl;
+import org.keycloak.crd.FSMStatus;
+import org.keycloak.crd.Keycloak;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.logging.Logger;
 
@@ -16,6 +21,17 @@ public enum ControllerFSM {
     ERROR(ControllerFSM::error);
 
     private static final Logger logger = Logger.getLogger(ControllerFSM.class.getName());
+
+    public static final Map<TransitionIdentifier, Function<Keycloak, UpdateControl<Keycloak>>> stateTransitionModifiers = Map.of(
+            new TransitionIdentifier(AUGMENTATION_STARTED, AUGMENTATION_STARTED), (k) ->
+                    UpdateControl
+                            .<Keycloak>noUpdate()
+                            .rescheduleAfter(5, TimeUnit.SECONDS),
+            new TransitionIdentifier(AUGMENTATION_STARTED, AUGMENTATION_FINISHED), (k) ->
+                    UpdateControl
+                            .updateStatus(k.withStatus(new FSMStatus(AUGMENTATION_STARTED, AUGMENTATION_FINISHED)))
+                            .rescheduleAfter(0)
+    );
 
     public static Set<String> fileNames = Set.of(
         "build-system.properties",
@@ -41,47 +57,29 @@ public enum ControllerFSM {
     public static ControllerFSM unknown(FSMContext fsmContext) {
         var kc = fsmContext.getKeycloak();
 
-        var actual = KeycloakDeployment.getDeployment(fsmContext.getClient(), kc);
+        var actual = KeycloakDeployment.deploymentSelector(fsmContext.getClient(), kc).get();
         var desired = KeycloakDeployment.desiredDeployment(kc, fileNames);
 
         if (KeycloakDeployment.isOk(actual, desired)) {
             logger.info("Everything is fine");
             return DONE;
         } else {
-            logger.info("Recreating the the resources");
+            logger.info("Recreating the augmentation resources");
 
+            var jobSelector = AugmentationJob.jobSelector(fsmContext.getClient(), kc);
             // WORKAROUND
             // fsmContext.getClient().batch().v1().jobs().createOrReplace(AugmentationJob.desiredJob(kc));
-//            if (AugmentationJob.getJob(fsmContext.getClient(), fsmContext.getKeycloak()) != null) {
-//                fsmContext
-//                        .getClient()
-//                        .batch()
-//                        .v1()
-//                        .jobs()
-//                        .inNamespace(kc.getMetadata().getNamespace())
-//                        .withName(kc.getMetadata().getName())
-//                        .delete();
-//            }
-            if (AugmentationJob.getJob(fsmContext.getClient(), fsmContext.getKeycloak()) == null) {
-                fsmContext
-                        .getClient()
-                        .batch()
-                        .v1()
-                        .jobs()
-                        .create(AugmentationJob.desiredJob(kc));
+            if (jobSelector.get() != null) {
+                jobSelector.delete();
             }
+
+            jobSelector.create(AugmentationJob.desiredJob(kc));
 
             return AUGMENTATION_STARTED;
         }
     }
 
-    // need to create the job
-    // fetch the files
-    // create the secret
-    // go ahead ...
-
     private static boolean isKeycloakBuildFinished(FSMContext fsmContext) {
-        var augmentationFinished = false;
         try {
             var jobLogs = AugmentationJob
                     .jobSelector(fsmContext.getClient(), fsmContext.getKeycloak())
@@ -97,7 +95,8 @@ public enum ControllerFSM {
     public static ControllerFSM augmentationStarted(FSMContext fsmContext) {
         logger.info("Augmentation has started, waiting for it to finish");
 
-        var job = AugmentationJob.getJob(fsmContext.getClient(), fsmContext.getKeycloak());
+        var jobSelector = AugmentationJob.jobSelector(fsmContext.getClient(), fsmContext.getKeycloak());
+        var job = jobSelector.get();
         if (job == null) {
             logger.info("The Job doesn't exists anymore!");
             return UNKNOWN;
@@ -123,10 +122,6 @@ public enum ControllerFSM {
 
         var kc = fsmContext.getKeycloak();
         // Here we need to copy the files from the pod
-//        AugmentationJob
-//                .jobSelector(fsmContext.getClient(), fsmContext.getKeycloak())
-//                        .fromServer().get().
-
         var jobPodName = fsmContext
                 .getClient()
                 .pods()
@@ -151,11 +146,11 @@ public enum ControllerFSM {
                         .file("/opt/keycloak/lib/quarkus/" + file)
                         .read()
                         .readAllBytes();
-
                 files.put(file, content);
 
-                // TODO: provide an alternative backed by a PVC? Or engineer this even more to split files
-                if (content.length > 1000000) { // !Mb is the Secret maximum size
+                // decision: in case this limit get exceeded use custom-image
+                // Secret single file limit is 1 Mb -> we store each file into a separate secret
+                if (content.length > 1000000) {
                     throw new IllegalArgumentException("The augmented file " + file + " is bigger than 1Mb(" + content.length + ") and cannot be stored in a Secret");
                 }
             } catch (Exception ex) {
@@ -167,21 +162,13 @@ public enum ControllerFSM {
         for (var file: fileNames) {
             // WORKAROUND
             // fsmContext.getClient().secrets().createOrReplace(AugmentationSecret.desiredSecret(kc));
-            if (AugmentationSecret.getSecret(fsmContext.getClient(), fsmContext.getKeycloak(), file) != null) {
-                fsmContext
-                        .getClient()
-                        .secrets()
-                        .inNamespace(kc.getMetadata().getNamespace())
-                        .withName(kc.getMetadata().getName() + "-augmentation-" + file)
-                        .delete();
+            var secretSelector = AugmentationSecret.secretSelector(fsmContext.getClient(), fsmContext.getKeycloak(), file);
+            if (secretSelector.get() != null) {
+                secretSelector.delete();
             }
 
             logger.info("Creating secret " + file);
-            // Secret single file limit is 1 Mb -> we store each file into a separate secret
-            fsmContext
-                    .getClient()
-                    .secrets()
-                    .create(AugmentationSecret.desiredSecret(kc, file, files.get(file)));
+            secretSelector.create(AugmentationSecret.desiredSecret(kc, file, files.get(file)));
         }
 
         // delete the Job
@@ -193,38 +180,17 @@ public enum ControllerFSM {
         // and finally create the Deployment
 
         logger.info("Creating deployment");
-        fsmContext
-                .getClient()
-                .apps()
-                .deployments()
+        KeycloakDeployment
+                .deploymentSelector(fsmContext.getClient(), fsmContext.getKeycloak())
                 .createOrReplace(KeycloakDeployment.desiredDeployment(fsmContext.getKeycloak(), fileNames));
 
         return DONE;
     }
 
-    //    REMOVE ME???
-    private static class SimpleListener implements ExecListener {
-
-        @Override
-        public void onOpen() {
-            System.out.println("The shell will remain open for 10 seconds.");
-        }
-
-        @Override
-        public void onFailure(Throwable t, Response failureResponse) {
-            System.err.println("shell barfed");
-        }
-
-        @Override
-        public void onClose(int code, String reason) {
-            System.out.println("The shell will now close.");
-        }
-    }
-
     public static ControllerFSM done(FSMContext fsmContext) {
         var kc = fsmContext.getKeycloak();
 
-        var actual = KeycloakDeployment.getDeployment(fsmContext.getClient(), kc);
+        var actual = KeycloakDeployment.deploymentSelector(fsmContext.getClient(), kc).get();
         var desired = KeycloakDeployment.desiredDeployment(kc, fileNames);
 
         // Here we can better control the messages in the Status for example
