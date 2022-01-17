@@ -5,30 +5,30 @@ import io.fabric8.kubernetes.api.model.SecretBuilder;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import org.keycloak.crd.Keycloak;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 public class AugmentationSecret {
 
-    public static Secret getSecret(KubernetesClient client, Keycloak kc) {
+    public static Secret getSecret(KubernetesClient client, Keycloak kc, String fileName) {
+        var name = kc.getMetadata().getName() + "-augmentation-" + fileName;
         return client
                 .secrets()
                 .inNamespace(kc.getMetadata().getNamespace())
-                .withName(kc.getMetadata().getName() + "-augmentation")
+                .withName(name)
                 .get();
     }
 
-    public static List<Secret> desiredSecret(Keycloak kc, Map<String, String> content) {
-        var secrets = new ArrayList<Secret>(content.size());
+    private static Base64.Encoder encoder = Base64.getEncoder();
+
+    public static Secret desiredSecret(Keycloak kc, String fileName, byte[] content) {
+        var name = kc.getMetadata().getName() + "-augmentation-" + fileName;
         return new SecretBuilder()
                 .withNewMetadata()
-                .withName(kc.getMetadata().getName() + "-augmentation")
+                .withName(name)
                 .withNamespace(kc.getMetadata().getNamespace())
                 .withOwnerReferences(kc.getOwnerRefereces())
                 .endMetadata()
-                .addToStringData(content)
+                .addToData(fileName, encoder.encodeToString(content))
                 .build();
     }
 }

@@ -2,8 +2,6 @@ package org.keycloak;
 
 import io.fabric8.kubernetes.client.dsl.ExecListener;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -44,7 +42,7 @@ public enum ControllerFSM {
         var kc = fsmContext.getKeycloak();
 
         var actual = KeycloakDeployment.getDeployment(fsmContext.getClient(), kc);
-        var desired = KeycloakDeployment.desiredDeployment(kc);
+        var desired = KeycloakDeployment.desiredDeployment(kc, fileNames);
 
         if (KeycloakDeployment.isOk(actual, desired)) {
             logger.info("Everything is fine");
@@ -140,59 +138,25 @@ public enum ControllerFSM {
                 .getMetadata()
                 .getName();
 
-        Map<String, String> files = new HashMap();
-//        try {
-//            var baos = new ByteArrayOutputStream();
-//
-//            logger.info("Pob Job Name is " + jobPodName);
-//
-//            // Need to split the output in small pieces
-//            // Secret entries -> Too long: must have at most 1048576 bytes
-//
-////            fsmContext
-////                    .getClient()
-////                    .pods()
-////                    .inNamespace(kc.getMetadata().getNamespace())
-////                    .withName(jobPodName)
-////                    .writingOutput(baos)
-////                    .writingError(baos)
-////                    // .withTTY()
-////                    // .usingListener(new SimpleListener())
-////                    .exec("/bin/sh", "-c", "ls -1 /opt/keycloak/lib/quarkus");
-////
-////            // Exec is async, need to wait for the output
-////            // TODO: FIXME properly waiting for the output
-////            Thread.sleep(1000);
-//
-//            var filesFromAugmentation = baos.toString();
-//
-//            logger.warning("DEBUG -> " + filesFromAugmentation);
-//
-//            for (var fileName: fileNames) {
-//                files.put(fileName, null);
-//            }
-//        } catch (Exception ex) {
-//            logger.severe("Cannot list augmented files");
-//            throw new RuntimeException(ex);
-//        }
+        Map<String, byte[]> files = new HashMap();
 
-        for (var file: files.keySet()) {
+        for (var file: fileNames) {
             try {
                 logger.severe("Reading content of " + file);
-                var content = new String(fsmContext
+                var content = fsmContext
                         .getClient()
                         .pods()
                         .inNamespace(kc.getMetadata().getNamespace())
                         .withName(jobPodName)
                         .file("/opt/keycloak/lib/quarkus/" + file)
                         .read()
-                        .readAllBytes());
+                        .readAllBytes();
 
                 files.put(file, content);
 
                 // TODO: provide an alternative backed by a PVC? Or engineer this even more to split files
-                if (content.getBytes().length > 1000000) { // !Mb is the Secret maximum size
-                    throw new IllegalArgumentException("An augmented file is bigger than 1Mb and cannot be stored in a Secret");
+                if (content.length > 1000000) { // !Mb is the Secret maximum size
+                    throw new IllegalArgumentException("The augmented file " + file + " is bigger than 1Mb(" + content.length + ") and cannot be stored in a Secret");
                 }
             } catch (Exception ex) {
                 logger.severe("Cannot read file " + file + " content");
@@ -200,30 +164,40 @@ public enum ControllerFSM {
             }
         }
 
-        // WORKAROUND
-        // fsmContext.getClient().secrets().createOrReplace(AugmentationSecret.desiredSecret(kc));
-        if (AugmentationSecret.getSecret(fsmContext.getClient(), fsmContext.getKeycloak()) != null) {
+        for (var file: fileNames) {
+            // WORKAROUND
+            // fsmContext.getClient().secrets().createOrReplace(AugmentationSecret.desiredSecret(kc));
+            if (AugmentationSecret.getSecret(fsmContext.getClient(), fsmContext.getKeycloak(), file) != null) {
+                fsmContext
+                        .getClient()
+                        .secrets()
+                        .inNamespace(kc.getMetadata().getNamespace())
+                        .withName(kc.getMetadata().getName() + "-augmentation-" + file)
+                        .delete();
+            }
+
+            logger.info("Creating secret " + file);
+            // Secret single file limit is 1 Mb -> we store each file into a separate secret
             fsmContext
                     .getClient()
                     .secrets()
-                    .inNamespace(kc.getMetadata().getNamespace())
-                    .withName(kc.getMetadata().getName() + "-augmentation")
-                    .delete();
+                    .create(AugmentationSecret.desiredSecret(kc, file, files.get(file)));
         }
-        // Secret single file limit is 1 Mb
-        fsmContext.getClient().secrets().create(AugmentationSecret.desiredSecret(kc, files));
 
         // delete the Job
+        logger.info("Deleting job");
         AugmentationJob
                 .jobSelector(fsmContext.getClient(), kc)
                 .delete();
 
         // and finally create the Deployment
+
+        logger.info("Creating deployment");
         fsmContext
                 .getClient()
                 .apps()
                 .deployments()
-                .createOrReplace(KeycloakDeployment.desiredDeployment(fsmContext.getKeycloak()));
+                .createOrReplace(KeycloakDeployment.desiredDeployment(fsmContext.getKeycloak(), fileNames));
 
         return DONE;
     }
@@ -251,7 +225,7 @@ public enum ControllerFSM {
         var kc = fsmContext.getKeycloak();
 
         var actual = KeycloakDeployment.getDeployment(fsmContext.getClient(), kc);
-        var desired = KeycloakDeployment.desiredDeployment(kc);
+        var desired = KeycloakDeployment.desiredDeployment(kc, fileNames);
 
         // Here we can better control the messages in the Status for example
         if (KeycloakDeployment.isOk(actual, desired)) {

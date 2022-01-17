@@ -1,9 +1,18 @@
 package org.keycloak;
 
+import io.fabric8.kubernetes.api.model.Volume;
+import io.fabric8.kubernetes.api.model.VolumeBuilder;
+import io.fabric8.kubernetes.api.model.VolumeMount;
+import io.fabric8.kubernetes.api.model.VolumeMountBuilder;
 import io.fabric8.kubernetes.api.model.apps.Deployment;
 import io.fabric8.kubernetes.api.model.apps.DeploymentBuilder;
 import io.fabric8.kubernetes.client.KubernetesClient;
+import io.fabric8.kubernetes.client.utils.KubernetesResourceUtil;
+import io.javaoperatorsdk.operator.processing.KubernetesResourceUtils;
 import org.keycloak.crd.Keycloak;
+
+import java.util.ArrayList;
+import java.util.Set;
 
 public class KeycloakDeployment {
 
@@ -23,7 +32,31 @@ public class KeycloakDeployment {
                 .get();
     }
 
-    public static Deployment desiredDeployment(Keycloak kc) {
+    public static Deployment desiredDeployment(Keycloak kc, Set<String> fileNames) {
+
+        var volumeMounts = new ArrayList<VolumeMount>();
+        var volumes = new ArrayList<Volume>();
+
+        for (var file: fileNames) {
+            var name = KubernetesResourceUtil.sanitizeName(file);
+
+            volumeMounts.add(
+                new VolumeMountBuilder()
+                        .withName(name)
+                        .withMountPath("/opt/keycloak/lib/quarkus/" + file)
+                        .withSubPath(file)
+                        .withReadOnly(true)
+                        .build());
+
+            volumes.add(
+                new VolumeBuilder()
+                        .withName(name)
+                        .withNewSecret()
+                        .withSecretName(kc.getMetadata().getName() + "-augmentation-" + file)
+                        .endSecret()
+                        .build());
+        }
+
         return new DeploymentBuilder()
                 .withNewMetadata()
                 .withName(kc.getMetadata().getName())
@@ -31,7 +64,13 @@ public class KeycloakDeployment {
                 .withOwnerReferences(kc.getOwnerRefereces())
                 .endMetadata()
                 .withNewSpec()
+                .withNewSelector()
+                .addToMatchLabels("app", "keycloak")
+                .endSelector()
                 .withNewTemplate()
+                .withNewMetadata()
+                .addToLabels("app", "keycloak")
+                .endMetadata()
                 .withNewSpec()
 //                .addNewInitContainer()
 //                // TODO: init container image and command
@@ -47,23 +86,25 @@ public class KeycloakDeployment {
                 .addNewContainer()
                 .withName("keycloak-main")
                 .withImage("quay.io/keycloak/keycloak-x:latest")
-                .withArgs("start")
+                .withArgs("start", "--hostname-strict=false", "--http-enabled=true")
                 .addNewPort()
-                .withHostPort(8080)
+                .withContainerPort(8080)
                 .endPort()
-                .addNewVolumeMount()
-                .withName("augmentation")
-                .withMountPath("/opt/keycloak/lib/quarkus")
-                .withReadOnly(true)
-                .endVolumeMount()
+                .withVolumeMounts(volumeMounts)
+//                .addNewVolumeMount()
+//                .withName("augmentation")
+//                .withMountPath("/opt/keycloak/lib/quarkus")
+//                .withReadOnly(true)
+//                .endVolumeMount()
                 .endContainer()
+                .withVolumes(volumes)
                 // Secret containing the tar.gz of the cached distribution
-                .addNewVolume()
-                .withName("augmentation")
-                .withNewSecret()
-                .withSecretName(kc.getMetadata().getName() + "-augmentation")
-                .endSecret()
-                .endVolume()
+//                .addNewVolume()
+//                .withName("augmentation")
+//                .withNewSecret()
+//                .withSecretName(kc.getMetadata().getName() + "-augmentation")
+//                .endSecret()
+//                .endVolume()
                 // Empty dir where the distribution will be unpacked
 //                .addNewVolume()
 //                .withName("distribution")
@@ -74,6 +115,7 @@ public class KeycloakDeployment {
                 .endTemplate()
                 .endSpec()
                 .build();
+
     }
 
 }
